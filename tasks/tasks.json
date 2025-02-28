@@ -1,0 +1,8 @@
+[
+  {
+    "id": "zad1",
+    "name": "Hello World",
+    "description": "Napisz program w Rust, który wyświetla 'Hello World' na konsoli.",
+    "test_path": "you_path_here\\zad1\\tests"
+  }
+]

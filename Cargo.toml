@@ -1,0 +1,18 @@
+[package]
+name = "sirtck"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+futures = "0.3.*"
+tokio = { version = "1.43.*", features = ["rt", "rt-multi-thread", "macros"] }
+dotenv = "0.15.*"
+octocrab = "0.43.*"
+anyhow = "1.0.*"
+serde_json = "1.0.*"
+tempfile = "3.17.*"
+fs_extra = "1.3.*"
+regex = "1.11.*"
+validator = "0.20.*"
+serde = "1.0.*"
+# Obsługa GitHub
