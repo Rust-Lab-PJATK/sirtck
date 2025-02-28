@@ -64,16 +64,12 @@ An example comment posted on a PR might look like:
 **Score:** 5/5
 
 ### Test Output
-```
-... (test output here) ...
-```
+ (test output here)
+
 
 ### Clippy Output
+   (clippy output here)
 ```
-... (clippy output here) ...
-```
-```
-
 ## Contributing
 
 Contributions are welcome! Please open issues or submit pull requests to help improve SIRTCK.
