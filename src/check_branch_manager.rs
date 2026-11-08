@@ -58,10 +58,10 @@ pub fn parse_test_summary(output: &str) -> (u32, u32) {
     (total_tests, total_passed)
 }
 
-/// Retrieves the repository URL from a PullRequest.
+/// Retrieves the source repository URL from a PullRequest.
 /// Prefers the clone URL, then the SSH URL, and falls back to the HTML URL.
 fn get_repo_url(pr: &PullRequest) -> Option<String> {
-    pr.base.repo.as_ref().map(|repo| {
+    pr.head.repo.as_ref().map(|repo| {
         if let Some(clone_url) = &repo.clone_url {
             clone_url.to_string()
         } else if let Some(ssh_url) = &repo.ssh_url {
@@ -153,21 +153,21 @@ pub fn check_branch_via_task(task: &Task, pr: &PullRequest) -> Result<Score> {
     let test_output = sandbox.run(
         temp_path,
         &task.id,
-        &["test", "--offline", "--locked", "--", "--nocapture"],
+        &["test", "--", "--nocapture"],
     )?;
 
     let test_stdout = String::from_utf8_lossy(&test_output.stdout);
     let (total_tests, passed_tests) = parse_test_summary(&test_stdout);
     ensure!(
         test_output.status.success() || total_tests > 0,
-        "Cargo test could not complete (check Cargo.lock and offline dependencies): {}",
+        "Cargo test could not complete: {}",
         String::from_utf8_lossy(&test_output.stderr)
     );
 
     let clippy_output = sandbox.run(
         temp_path,
         &task.id,
-        &["clippy", "--offline", "--locked", "--", "-D", "warnings"],
+        &["clippy", "--", "-D", "warnings"],
     )?;
 
     let clippy_stderr = String::from_utf8_lossy(&clippy_output.stderr);

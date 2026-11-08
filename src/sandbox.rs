@@ -45,7 +45,6 @@ impl Sandbox {
             "--pull=never",
             "--name",
             name,
-            "--network=none",
             "--read-only",
             "--user=10001:10001",
             "--cap-drop=ALL",
@@ -60,9 +59,12 @@ impl Sandbox {
             "--memory-swap",
             &format!("{}m", self.memory_mb),
             "--tmpfs=/tmp:rw,nosuid,nodev,size=64m,mode=1777",
+            "--tmpfs=/work:rw,nosuid,nodev,size=512m,uid=10001,gid=10001",
+            "--tmpfs=/cargo:rw,nosuid,nodev,size=512m,uid=10001,gid=10001",
             "--tmpfs=/target:rw,exec,nosuid,nodev,size=512m,uid=10001,gid=10001",
             "--env=CARGO_TARGET_DIR=/target",
-            "--env=CARGO_NET_OFFLINE=true",
+            "--env=CARGO_HOME=/cargo",
+            "--env=CARGO_NET_OFFLINE=false",
             "--env=RUSTUP_TOOLCHAIN=1.99.1",
             "--mount",
         ]);
@@ -71,10 +73,12 @@ impl Sandbox {
             root.display()
         ));
         command.args([
-            "--workdir",
-            &format!("/submission/{task}"),
-            "--entrypoint=cargo",
+            "--entrypoint=sh",
             &self.image,
+            "-c",
+            "cp -R /submission/. /work/ && cd /work/\"$1\" && shift && exec cargo \"$@\"",
+            "sirtck-runner",
+            task,
         ]);
         command.args(args);
         command
@@ -179,36 +183,42 @@ mod tests {
             cpus: 2,
             memory_mb: 1024,
         };
+
         let cmd = sandbox.command(
             Path::new("/tmp/project"),
             "task",
             "test",
-            &["test", "--offline", "--locked"],
+            &["test"],
         );
+
         let args: Vec<_> = cmd
             .get_args()
             .map(|s| s.to_string_lossy().into_owned())
             .collect();
+
         for required in [
-            "--network=none",
             "--read-only",
             "--user=10001:10001",
             "--cap-drop=ALL",
             "--pull=never",
-            "--offline",
-            "--locked",
+            "--env=CARGO_NET_OFFLINE=false",
+            "--env=CARGO_HOME=/cargo",
         ] {
             assert!(args.iter().any(|arg| arg == required));
         }
+
         assert!(args
             .iter()
             .any(|arg| arg == "type=bind,src=/tmp/project,dst=/submission,readonly"));
+
+        assert!(!args.iter().any(|arg| arg == "--network=none"));
     }
 
     #[test]
     fn timeout_terminates_process() {
         let error =
             run_bounded(Command::new("sleep").arg("5"), Duration::from_millis(30)).unwrap_err();
+
         assert!(error.to_string().contains("exceeded"));
     }
 
