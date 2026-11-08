@@ -1,11 +1,27 @@
-use octocrab::models::pulls::PullRequest;
 use crate::entity::score::Score;
 use crate::entity::task::Task;
-use std::process::Command;
-use std::fs;
-use tempfile::tempdir;
+use crate::sandbox::Sandbox;
+use anyhow::{ensure, Context, Result};
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
+use octocrab::models::pulls::PullRequest;
 use regex::Regex;
+use std::process::Command;
+use tempfile::tempdir;
+
+fn reject_symlinks(path: &std::path::Path) -> Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        ensure!(
+            !kind.is_symlink(),
+            "Symlinks in submissions are not supported"
+        );
+        if kind.is_dir() {
+            reject_symlinks(&entry.path())?;
+        }
+    }
+    Ok(())
+}
 
 /// Parses the test summary output and returns a tuple of (total_tests, passed_tests).
 ///
@@ -19,13 +35,16 @@ pub fn parse_test_summary(output: &str) -> (u32, u32) {
     let mut total_passed = 0;
 
     for caps in re.captures_iter(output) {
-        let passed: u32 = caps.get(1)
+        let passed: u32 = caps
+            .get(1)
             .and_then(|m| m.as_str().parse().ok())
             .unwrap_or(0);
-        let failed: u32 = caps.get(2)
+        let failed: u32 = caps
+            .get(2)
             .and_then(|m| m.as_str().parse().ok())
             .unwrap_or(0);
-        let measured: u32 = caps.get(4)
+        let measured: u32 = caps
+            .get(4)
             .and_then(|m| m.as_str().parse().ok())
             .unwrap_or(0);
         let tests_run = passed + failed + measured;
@@ -48,7 +67,10 @@ fn get_repo_url(pr: &PullRequest) -> Option<String> {
         } else if let Some(ssh_url) = &repo.ssh_url {
             ssh_url.to_string()
         } else {
-            repo.html_url.as_ref().expect("Expected html_url to be present").to_string()
+            repo.html_url
+                .as_ref()
+                .expect("Expected html_url to be present")
+                .to_string()
         }
     })
 }
@@ -61,63 +83,99 @@ fn get_repo_url(pr: &PullRequest) -> Option<String> {
 /// - `test_output`: the raw output from running the tests,
 /// - `clippy_output`: the Clippy stderr output.
 ///
-/// In case of errors (e.g. failing to clone the repository or copy test files),
-/// an empty/default score is returned.
-pub fn check_branch_via_task(task: &Task, pr: &PullRequest) -> Score {
-    let temp_dir = tempdir().expect("Failed to create temporary directory");
+/// Infrastructure failures are returned separately from submission results.
+pub fn check_branch_via_task(task: &Task, pr: &PullRequest) -> Result<Score> {
+    let sandbox = Sandbox::from_env()?;
+    ensure!(
+        !task.id.is_empty()
+            && task
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "Invalid task identifier"
+    );
+    let temp_dir = tempdir()?;
     let temp_path = temp_dir.path();
 
     let repo_url = match get_repo_url(pr) {
         Some(url) => url,
         None => {
             eprintln!("Repository URL not found");
-            return Score::default();
+            anyhow::bail!("Repository URL not found");
         }
     };
 
     let branch = &pr.head.ref_field;
     let clone_status = Command::new("git")
-        .args(&["clone", "--branch", branch, &repo_url, temp_path.to_str().unwrap()])
+        .args([
+            "clone",
+            "--branch",
+            branch,
+            &repo_url,
+            temp_path.to_str().unwrap(),
+        ])
         .status()
-        .expect("Failed to execute git clone");
+        .context("Failed to execute git clone")?;
     if !clone_status.success() {
         eprintln!("Repository cloning failed");
-        return Score::default();
+        anyhow::bail!("Repository cloning failed");
     }
 
     let tests_source = std::path::Path::new(&task.test_path);
+    reject_symlinks(temp_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(temp_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
     let destination = temp_path.join(&task.id);
-    fs::create_dir_all(&destination)
-        .expect("Failed to create destination directory");
+
+    if !destination.is_dir() {
+        eprintln!("Exercise directory not found: {}", destination.display());
+        anyhow::bail!("Exercise directory not found");
+    }
+
+    if !tests_source.is_dir() {
+        eprintln!("Test directory not found: {}", tests_source.display());
+        anyhow::bail!("Test directory not found");
+    }
 
     let mut copy_options = CopyOptions::new();
     copy_options.overwrite = true;
     copy_options.copy_inside = true;
-    if let Err(err) = copy_dir(&tests_source, &destination, &copy_options) {
+
+    if let Err(err) = copy_dir(tests_source, &destination, &copy_options) {
         eprintln!("Error copying test files: {:?}", err);
-        return Score::default();
+        anyhow::bail!("Error copying test files: {err}");
     }
 
-    let test_output = Command::new("cargo")
-        .args(&["test", "--", "--nocapture"])
-        .current_dir(&destination)
-        .output()
-        .expect("Failed to execute cargo test");
+    let test_output = sandbox.run(
+        temp_path,
+        &task.id,
+        &["test", "--offline", "--locked", "--", "--nocapture"],
+    )?;
 
     let test_stdout = String::from_utf8_lossy(&test_output.stdout);
     let (total_tests, passed_tests) = parse_test_summary(&test_stdout);
+    ensure!(
+        test_output.status.success() || total_tests > 0,
+        "Cargo test could not complete (check Cargo.lock and offline dependencies): {}",
+        String::from_utf8_lossy(&test_output.stderr)
+    );
 
-    let clippy_output = Command::new("cargo")
-        .args(&["clippy", "--", "-D", "warnings"])
-        .current_dir(&destination)
-        .output()
-        .expect("Failed to execute cargo clippy");
+    let clippy_output = sandbox.run(
+        temp_path,
+        &task.id,
+        &["clippy", "--offline", "--locked", "--", "-D", "warnings"],
+    )?;
+
     let clippy_stderr = String::from_utf8_lossy(&clippy_output.stderr);
 
-    Score {
+    Ok(Score {
         max_points: total_tests,
         received_points: passed_tests,
         test_output: test_stdout.to_string(),
         clippy_output: clippy_stderr.to_string(),
-    }
+    })
 }

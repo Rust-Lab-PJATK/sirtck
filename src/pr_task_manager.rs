@@ -1,6 +1,6 @@
-use octocrab::{models::pulls::PullRequest, Octocrab};
 use anyhow::Result;
 use octocrab::params::State;
+use octocrab::{models::pulls::PullRequest, Octocrab};
 
 /// Manages PR-related tasks for a given repository.
 pub struct PrTaskManager {
@@ -34,7 +34,8 @@ impl PrTaskManager {
     pub async fn get_prs_for_task(&self, task_id: &str) -> Result<Vec<PullRequest>> {
         let mut all_prs = Vec::new();
 
-        let mut page = self.octocrab
+        let mut page = self
+            .octocrab
             .pulls(&self.owner, &self.repo)
             .list()
             .state(State::All)
@@ -62,9 +63,14 @@ impl PrTaskManager {
     }
 
     /// Checks if the specified pull request already has a comment containing the given search text.
-    pub async fn pr_has_comment_with_text(&self, pr: &PullRequest, search_text: &str) -> Result<bool> {
+    pub async fn pr_has_comment_with_text(
+        &self,
+        pr: &PullRequest,
+        search_text: &str,
+    ) -> Result<bool> {
         let pr_number = pr.number;
-        let mut page = self.octocrab
+        let mut page = self
+            .octocrab
             .issues(&self.owner, &self.repo)
             .list_comments(pr_number)
             .per_page(100)
@@ -73,7 +79,10 @@ impl PrTaskManager {
 
         loop {
             if page.items.iter().any(|comment| {
-                comment.body.as_ref().map_or(false, |body| body.contains(search_text))
+                comment
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.contains(search_text))
             }) {
                 return Ok(true);
             }

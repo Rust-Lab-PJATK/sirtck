@@ -1,15 +1,16 @@
-use std::sync::Arc;
 use futures::stream::{self, StreamExt};
 use std::env;
+use std::sync::Arc;
 
 use crate::check_branch_manager::check_branch_via_task;
 use crate::file_task_manager::{FileTaskRepository, TaskRepository};
 use crate::pr_task_manager::PrTaskManager;
 
-mod file_task_manager;
-mod entity;
-mod pr_task_manager;
 mod check_branch_manager;
+mod entity;
+mod file_task_manager;
+mod pr_task_manager;
+mod sandbox;
 
 #[tokio::main]
 async fn main() {
@@ -25,10 +26,7 @@ async fn main() {
     let owner = &env::var("GITHUB_OWNER").ok().unwrap();
     let github_repo_name = &env::var("GITHUB_REPO_NAME").ok().unwrap();
 
-    let pr_manager = Arc::new(
-        PrTaskManager::new(owner, github_repo_name, token.as_deref())
-            .await,
-    );
+    let pr_manager = Arc::new(PrTaskManager::new(owner, github_repo_name, token.as_deref()).await);
 
     stream::iter(all_tasks)
         .for_each_concurrent(None, |task| {
@@ -47,14 +45,16 @@ async fn main() {
                                         .await
                                         .expect("Error checking PR comments")
                                     {
-                                        let score = check_branch_via_task(&task_clone, &pr);
-                                        let comment = format!(
+                                        let comment = match check_branch_via_task(&task_clone, &pr) {
+                                            Ok(score) => format!(
                                             "## 🦀 Test Results 🦀\n\n**Score:** {}/{}\n\n### Test Output\n```\n{}\n```\n\n### Clippy Output\n```\n{}\n```",
                                             score.received_points,
                                             score.max_points,
                                             score.test_output,
                                             score.clippy_output
-                                        );
+                                        ),
+                                            Err(error) => format!("## Checking failed\n\nSandbox/infrastructure error:\n```text\n{error:#}\n```"),
+                                        };
                                         pr_manager
                                             .add_comment_to_pr(&pr, &comment)
                                             .await

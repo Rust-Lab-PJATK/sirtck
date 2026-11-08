@@ -42,6 +42,34 @@ SIRTCK is an automated system for evaluating Rust solutions via GitHub pull requ
 
 ## Usage
 
+### Docker sandbox
+
+Build the trusted runner before starting SIRTCK:
+
+```bash
+docker build -t sirtck-runner:1 .
+```
+
+SIRTCK requires a local Docker daemon accessible to its user. Each Cargo test
+and Clippy invocation runs in a separate disposable non-root container with no
+network, a read-only submission and filesystem, dropped capabilities, and limits
+of 120 seconds, 2 CPUs, 1024 MiB RAM and 128 processes. Build artifacts use a
+512 MiB tmpfs. No GitHub credentials or Docker socket are passed to submissions.
+
+Optional configuration: `SIRTCK_SANDBOX_IMAGE` (default `sirtck-runner:1`),
+`SIRTCK_TIMEOUT_SECONDS`, `SIRTCK_CPUS`, and `SIRTCK_MEMORY_MB` (positive integers).
+Images are never pulled automatically. Cargo runs with `--offline --locked`;
+submissions must include an up-to-date `Cargo.lock`. The base runner supports
+dependency-free exercises. For other exercises, prepare a derived image with
+`cargo fetch --locked` using reviewed manifests and lockfiles, then select it
+with `SIRTCK_SANDBOX_IMAGE`. Missing cached dependencies produce a checking error.
+Never prepare the trusted image by executing code or Cargo configuration from PRs.
+
+Docker containers share the host kernel; use a dedicated worker host for hostile
+submissions. Docker daemon access itself grants broad host privileges. Keep the
+host and runner patched. Sandbox failures are posted without a numeric score
+and are retried on the next checker run.
+
 Run the application using Cargo:
 
 ```bash
